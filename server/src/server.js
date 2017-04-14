@@ -14,6 +14,7 @@ var readDocument = database.readDocument;
 //Imports JSON
 var StatusUpdateSchema = require('./schemas/statusupdate.json');
 var validate = require('express-jsonschema').validate;
+var CommentSchema = require('./schemas/comment.json');
 var writeDocument = database.writeDocument;
 var addDocument = database.addDocument;
 
@@ -146,6 +147,20 @@ writeDocument('feeds', feedData);
 return newStatusUpdate;
 }
 
+function postComment(feedItemId, author, contents) {
+  var feedItem = readDocument('feedItems', feedItemId);
+  feedItem.comments.push({
+    "author": author,
+    "contents": contents,
+    "postDate": new Date().getTime(),
+    "likeCounter": []
+  });
+  writeDocument('feedItems', feedItem);
+  // Return a resolved version of the feed item.\
+  return feedItem
+
+}
+
 // `POST /feeditem { userId: user, location: location, contents: contents  }`
 app.post('/feeditem',
        validate({ body: StatusUpdateSchema }), function(req, res) {
@@ -168,6 +183,28 @@ if (fromUser === body.userId) {
   // 401: Unauthorized.
   res.status(401).end();
 }
+});
+
+app.post('/feeditem/:feeditemid/commentthread/comment', validate({ body: CommentSchema }), function(req, res) {
+  // If this function runs, `req.body` passed JSON validation!
+  var body = req.body;
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  var feedItemId = req.params.feeditemid;
+
+  // Check if requester is authorized to post this status update.
+  // (The requester must be the author of the update.)
+  if(fromUser === body.userId){
+    postComment(feedItemId, body.userId, body.contents);
+    // When POST creates a new resource, we should tell the client about it
+    // in the 'Location' header and use status code 201.
+    res.status(201);
+    // Send the update!
+    res.send(getFeedItemSync(feedItemId));
+  } else {
+    // 401: Unauthorized.
+    res.status(401).end();
+  }
+
 });
 
 // Reset database.
@@ -250,6 +287,54 @@ app.put('/feeditem/:feeditemid/likelist/:userid', function(req, res) {
     }
     // Return a resolved version of the likeCounter
     res.send(feedItem.likeCounter.map((userId) => readDocument('users', userId)));
+  } else {
+    // 401: Unauthorized.
+    res.status(401).end();
+  }
+});
+
+app.put('/feeditem/:feeditemid/commentthread/:commentid/likelist/:userid', function(req, res) {
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  // Convert params from string to number.
+  var feedItemId = parseInt(req.params.feeditemid, 10);
+  var userId = parseInt(req.params.userid, 10);
+  if (fromUser === userId) {
+    var feedItem = readDocument('feedItems', feedItemId);
+    var comment = feedItem.comments[req.params.commentid]
+    // Add to likeCounter if not already present.
+    if (comment.likeCounter.indexOf(userId) === -1) {
+      comment.likeCounter.push(userId);
+      writeDocument('feedItems', feedItem);
+    }
+    comment.author = readDocument('users', comment.author)
+    // Return a resolved version of the likeCounter
+    res.send(comment);
+  } else {
+    // 401: Unauthorized.
+    res.status(401).end();
+  }
+});
+
+//Unlike comment
+app.delete('/feeditem/:feeditemid/commentthread/:commentid/likelist/:userid', function(req, res) {
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  // Convert params from string to number.
+  var feedItemId = parseInt(req.params.feeditemid, 10);
+  var userId = parseInt(req.params.userid, 10);
+   if (fromUser === userId) {
+    var feedItem = readDocument('feedItems', feedItemId);
+    var comment = feedItem.comments[req.params.commentid]
+    var likeIndex = comment.likeCounter.indexOf(userId);
+    // Remove from likeCounter if present
+    if (likeIndex !== -1) {
+      comment.likeCounter.splice(likeIndex, 1);
+      writeDocument('feedItems', feedItem);
+    }
+    // Return a resolved version of the likeCounter
+    // Note that this request succeeds even if the
+    // user already unliked the request!
+    comment.author = readDocument('users', comment.author)
+    res.send(comment);
   } else {
     // 401: Unauthorized.
     res.status(401).end();
